@@ -64,3 +64,151 @@ Build only the foundation:
 4. A pytest file or command-line check covering: 200, 200.00, 200.01, 0, -1, "abc", "", NaN, View Fares with -5, whitespace and case variants of the agent name, unknown agent, unknown agent with unsupported action (R1), revoked agent with each of the four actions (R2), revoked agent with amount -1 (R2), and unsupported action "Cancel Flight" (R7).
 Run the checks on a temporary database and report real results. Create requirements.txt, .gitignore and a short README stub. Do not build the UI yet.
 ```
+
+---
+
+## Stage 2 Prompt: Streamlit Interface Development
+
+```text
+# STAGE 2: STREAMLIT INTERFACE DEVELOPMENT
+## Ryanair Agent Gatekeeper
+
+Act as a senior Python developer and professional UI/UX designer.
+
+I have already completed Stage 1 of my Ryanair Agent Gatekeeper project.
+
+The existing backend has:
+- database.py
+- gatekeeper.py
+- app.py
+- test_cases.py
+- README.md
+- PROMPTS.md
+- requirements.txt
+
+Stage 1 has passed 21 tests with zero failures.
+
+GitHub repository:
+https://github.com/pankajk4-ui/Ryanair-Agent-Gatekeeper
+
+Student: Pankaj Kumar Tiwari
+Registration Number: PGD202564630
+
+## IMPORTANT INSTRUCTIONS
+First inspect all existing project files.
+Understand the existing database functions, decision engine, business rules and application structure before making changes.
+Do not rebuild the backend from scratch.
+Do not remove or weaken any existing functionality.
+Do not change the seven established business rules.
+Preserve compatibility with the existing database and test suite.
+Make actual code changes rather than providing a development plan.
+Complete this stage in one controlled task. Do not enter an infinite development or rewriting loop.
+
+## 1. PROFESSIONAL DASHBOARD
+Build a premium Streamlit dashboard for Ryanair Agent Gatekeeper.
+Design requirements:
+- Modern airline-inspired design.
+- Navy blue, white and Ryanair-inspired yellow and blue accents.
+- Professional typography.
+- Clean spacing and alignment.
+- Attractive metric cards.
+- Modern tables.
+- Clear status indicators.
+- Consistent navigation.
+- Responsive layout.
+
+Display:
+RYANAIR AGENT GATEKEEPER
+AI Agent Permission & Transaction Control System
+Student: Pankaj Kumar Tiwari
+Registration Number: PGD202564630
+
+Create dashboard metrics using actual database information:
+- Total Registered Agents
+- Active Agents
+- Revoked Agents
+- Total Requests
+
+Also show:
+- ALLOW decisions
+- ASK CUSTOMER decisions
+- BLOCK decisions
+
+Include a decision distribution chart and recent activity section if the existing data supports them.
+Do not use hardcoded dashboard numbers.
+
+## 2. SIDEBAR NAVIGATION
+Create the following navigation:
+1. Dashboard
+2. Register Agent
+3. Check Agent Request
+4. Revoke Agent
+5. Customer Approvals
+6. About Project
+
+The interface should allow users to move between pages without losing saved database records.
+
+## 3. AGENT REGISTRATION PAGE
+Create a professional registration form.
+Fields:
+- Customer ID
+- Customer Name
+- Agent Name
+- Agent Description (optional)
+
+Use the existing registration functions from database.py.
+Display registration success and validation errors clearly.
+Show registered agents in a table with:
+- Agent ID
+- Customer ID
+- Customer Name
+- Agent Name
+- Registration Date
+- Status
+Prevent duplicate registrations according to the existing backend rules.
+
+## 4. REQUEST EVALUATION PAGE
+Create a clean request evaluation interface.
+Input fields:
+- Customer ID
+- Agent Name
+- Requested Action
+- Transaction Amount in EUR
+
+Supported actions:
+- View Fares
+- Book Flight
+- Change Booking
+- Request Refund
+
+Add a prominent EVALUATE REQUEST button.
+Use the actual decision engine from gatekeeper.py.
+Do not duplicate or rewrite the decision logic inside app.py.
+Display the result prominently:
+ALLOW
+ASK CUSTOMER
+BLOCK
+
+Show:
+- Decision
+- Rule number
+- Explanation
+- Customer ID
+- Agent Name
+- Requested Action
+- Amount
+- Date and time
+
+Use green for ALLOW, amber for ASK CUSTOMER and red for BLOCK.
+All evaluated requests must be recorded using the existing database logging functions.
+Do not execute real bookings, payments or refunds.
+
+## 5. AGENT REVOCATION PAGE
+Create a dedicated agent management page.
+Display registered agents and their current status.
+Allow the user to select an active agent and revoke its permission.
+Use the existing real revocation function.
+Record the exact revocation timestamp.
+Require a confirmation before revoking.
+Immediately reflect the revoked status.
+```

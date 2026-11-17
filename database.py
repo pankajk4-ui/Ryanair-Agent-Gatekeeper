@@ -535,3 +535,28 @@ def get_audit_events(
         query += " ORDER BY event_id ASC"
         cursor = conn.execute(query, params)
         return [dict(row) for row in cursor.fetchall()]
+
+
+def list_approvals(
+    request_id: Optional[str] = None,
+    customer_id: Optional[str] = None,
+    db: Any = None
+) -> List[Dict[str, Any]]:
+    """
+    List approval decisions from the approvals table.
+    """
+    with get_db_connection(db) as conn:
+        conn.row_factory = sqlite3.Row
+        query = "SELECT * FROM approvals WHERE 1=1"
+        params: List[Any] = []
+
+        if request_id:
+            query += " AND request_id = ?"
+            params.append(request_id.strip())
+        if customer_id:
+            query += " AND customer_id = ?"
+            params.append(customer_id.strip())
+
+        query += " ORDER BY decided_at DESC"
+        cursor = conn.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
