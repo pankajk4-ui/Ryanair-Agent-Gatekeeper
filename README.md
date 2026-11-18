@@ -16,15 +16,16 @@
 2. [Problem Statement](#2-problem-statement)
 3. [Project Objectives](#3-project-objectives)
 4. [Key Features](#4-key-features)
-5. [The Seven Gatekeeper Rules & Evaluation Hierarchy](#5-the-seven-gatekeeper-rules--evaluation-hierarchy)
-6. [Agent Identity & Security Model](#6-agent-identity--security-model)
-7. [Audit Log & Non-Repudiation Architecture](#7-audit-log--non-repudiation-architecture)
-8. [Database Schema & Data Integrity](#8-database-schema--data-integrity)
-9. [Technology Stack](#9-technology-stack)
-10. [Local Installation & Setup](#10-local-installation--setup)
-11. [Running the Application](#11-running-the-application)
-12. [Testing & Verification Suite](#12-testing--verification-suite)
-13. [Enterprise Production Security Considerations](#13-enterprise-production-security-considerations)
+5. [System Architecture & Request Processing Pipeline](#5-system-architecture--request-processing-pipeline)
+6. [The Seven Gatekeeper Rules & Evaluation Hierarchy](#6-the-seven-gatekeeper-rules--evaluation-hierarchy)
+7. [Agent Identity & Security Model](#7-agent-identity--security-model)
+8. [Audit Log & Non-Repudiation Architecture](#8-audit-log--non-repudiation-architecture)
+9. [Database Schema & Data Integrity](#9-database-schema--data-integrity)
+10. [Technology Stack](#10-technology-stack)
+11. [Local Installation & Setup](#11-local-installation--setup)
+12. [Running the Application](#12-running-the-application)
+13. [Testing & Verification Suite](#13-testing--verification-suite)
+14. [Enterprise Production Security Considerations](#14-enterprise-production-security-considerations)
 
 ---
 
@@ -80,7 +81,125 @@ The rapid rise of autonomous client-side AI agents introduces fundamental govern
 
 ---
 
-## 5. The Seven Gatekeeper Rules & Evaluation Hierarchy
+## 5. System Architecture & Request Processing Pipeline
+
+The Ryanair Agent Gatekeeper is engineered as a zero-trust, multi-tiered security gateway. The architecture ensures that no external AI agent can interact directly with Ryanair's transactional layer without undergoing input normalization, identity verification, status checks, and deterministic policy rule enforcement.
+
+### End-to-End Request Processing Flowchart
+
+The following flowchart illustrates the complete architectural pipeline: from incoming customer/agent requests, through input validation and registration checks, to rule evaluation, decision branching, human-in-the-loop approval, and dual-layer persistence into SQLite operational tables and the trigger-protected, append-only audit trail.
+
+```mermaid
+flowchart TD
+    %% 1. Ingestion Layer
+    subgraph Layer1 ["1. Client & Agent Request Ingestion"]
+        Req["Customer / External AI Agent Request"]
+        Lifecycle["Agent Registration / Revocation Action"]
+    end
+
+    %% 2. Validation Layer
+    subgraph Layer2 ["2. Input Validation & Normalization"]
+        Val["Input Validation and Normalization (Trim Whitespace, Case-Insensitive, Decimal Check)"]
+    end
+
+    %% 3. Identity & Status Gate
+    subgraph Layer3 ["3. Agent Registration & Status Check"]
+        RegCheck{"Agent Registered?"}
+        RevCheck{"Agent Status"}
+    end
+
+    %% 4. Rule Engine
+    subgraph Layer4 ["4. Deterministic Rule Engine"]
+        InputVal{"Valid Action & Amount?"}
+        RuleEval{"Action & Threshold Analysis"}
+    end
+
+    %% 5. Decisions
+    subgraph Layer5 ["5. Gatekeeper Decision"]
+        DecAllow["ALLOW (Status: ALLOWED)"]
+        DecAsk["ASK CUSTOMER (Status: PENDING APPROVAL)"]
+        DecBlock["BLOCK (Status: BLOCKED)"]
+    end
+
+    %% 6. Human in the Loop Queue
+    subgraph Layer6 ["6. Customer Approval Queue (HITL)"]
+        Queue["Customer Approval Queue (Pending Human Review)"]
+        CustDecision{"Customer Action"}
+        AppDec["Approval Decision Recorded (APPROVED / REJECTED)"]
+    end
+
+    %% 7. Database & Audit Log
+    subgraph Layer7 ["7. SQLite Database & Append-Only Audit Log"]
+        DB_Agents[("agents Table")]
+        DB_Requests[("requests Table")]
+        DB_Approvals[("approvals Table")]
+        DB_Audit[("audit_events Table (Append-Only via SQL Triggers)")]
+    end
+
+    %% Workflow Connections
+    Req --> Val
+    Val --> RegCheck
+    RegCheck -- "Unregistered" --> DecBlock
+    RegCheck -- "Registered" --> RevCheck
+    RevCheck -- "REVOKED" --> DecBlock
+    RevCheck -- "ACTIVE" --> InputVal
+
+    InputVal -- "Invalid Format / Negative / NaN" --> DecBlock
+    InputVal -- "Valid" --> RuleEval
+
+    RuleEval -- "View Fares (R3) or Booking <= EUR 200 (R4)" --> DecAllow
+    RuleEval -- "Booking > EUR 200 (R5) or Change/Refund (R6)" --> DecAsk
+
+    %% Ask Customer to Queue
+    DecAsk --> Queue
+    Queue --> CustDecision
+    CustDecision -- "Approve or Reject with Notes" --> AppDec
+
+    %% Database Writes
+    DecAllow --> DB_Requests
+    DecBlock --> DB_Requests
+    DecAsk --> DB_Requests
+
+    AppDec --> DB_Approvals
+    AppDec -. "Update Request Status" .-> DB_Requests
+
+    Lifecycle --> DB_Agents
+
+    %% Audit Log Writes (All Events)
+    DB_Requests ==> DB_Audit
+    DB_Approvals ==> DB_Audit
+    DB_Agents ==> DB_Audit
+```
+
+### Architectural Subsystems & Component Interactions
+
+1. **Client & Agent Ingestion Layer:**
+   - External AI agents and customers communicate via the UI or API endpoints. Requests specify `(customer_id, agent_name, action, amount)`.
+   - Dedicated administrative flows allow customers to register new agents or revoke existing authorizations at any time.
+2. **Input Validation & Preprocessing Layer:**
+   - **Identity Normalization:** Customer ID and Agent Name are stripped of whitespace; Agent Name comparison is enforced case-insensitively (`COLLATE NOCASE`).
+   - **Exact Decimal Parsing:** Monetary amounts are converted strictly to Python `Decimal`. Non-numeric values, negative numbers, empty strings, `NaN`, and `Infinity` are trapped immediately.
+3. **Agent Registration & Status Verification Gate:**
+   - **Registration Lookup:** Verifies whether `(customer_id, agent_name)` exists in the `agents` database table. If absent, the request is immediately rejected under **Rule R1 (`BLOCK`)**.
+   - **Revocation Check:** If the agent exists but has status `REVOKED`, the request is rejected under **Rule R2 (`BLOCK`)**. Rule R2 overrides all actions and amounts, providing timestamped proof of authorization termination.
+4. **Deterministic Policy & Rule Engine (`gatekeeper.py`):**
+   - **Input Validation (Rule R7):** Validates that the requested action is within `{"View Fares", "Book Flight", "Change Booking", "Request Refund"}` and that the amount conforms to business policy (e.g. `0.00` is rejected only for `Book Flight`).
+   - **Action & Threshold Evaluation (Rules R3–R6):**
+     - `View Fares` is read-only and automatically authorized under **Rule R3 (`ALLOW`)**.
+     - `Book Flight` $\le$ EUR 200.00 is pre-authorized and approved under **Rule R4 (`ALLOW`)**.
+     - `Book Flight` $>$ EUR 200.00 is flagged as high-value and routed under **Rule R5 (`ASK CUSTOMER`)**.
+     - `Change Booking` and `Request Refund` alter passenger itineraries and entitlements, requiring human confirmation under **Rule R6 (`ASK CUSTOMER`)**.
+5. **Human-in-the-Loop (HITL) Customer Approval Queue:**
+   - Requests triggering Rules R5 and R6 are quarantined in the `requests` table with status `PENDING APPROVAL`. Nothing is executed.
+   - The customer reviews the pending transaction details in the Streamlit UI, enters optional review comments, and explicitly chooses **`Approve`** or **`Reject`**.
+   - The decision is logged in the `approvals` table, the corresponding request status is updated to `APPROVED` or `REJECTED`, and an audit event is appended.
+6. **Relational Database & Immutable Audit Persistence Layer (`database.py`):**
+   - **Operational Tables:** SQLite relational tables maintain system state: `agents` (identity, registration, status), `requests` (evaluated transactions and statuses), and `approvals` (customer review history).
+   - **Append-Only Audit Trail:** Every event—including agent registration, revocation, transaction evaluation, and customer approval/rejection—is written to `audit_events`. SQLite triggers abort any attempt to `UPDATE` or `DELETE` audit rows, guaranteeing non-repudiation and audit readiness.
+
+---
+
+## 6. The Seven Gatekeeper Rules & Evaluation Hierarchy
 
 ### Evaluation Order (Deterministic Precedence)
 Every incoming request is evaluated through an immutable six-step sequence:
@@ -94,49 +213,6 @@ Every incoming request is evaluated through an immutable six-step sequence:
    - `Change Booking` or `Request Refund` $\rightarrow$ **`ASK CUSTOMER (R6)`**
 5. **Return Result Object:** Output structured `GatekeeperResult` (Decision, Rule, Explanation, Timestamp, Request ID, Status).
 6. **Write to Audit Log:** Atomically persist request record and append-only audit event.
-
-```
-                              [Incoming Agent Request]
-                                         │
-                                         ▼
-                            ┌─────────────────────────┐
-                            │ Step 1: Registered?     │──── No ─────► [R1: BLOCK]
-                            └─────────────────────────┘
-                                         │ Yes
-                                         ▼
-                            ┌─────────────────────────┐
-                            │ Step 2: Revoked?        │──── Yes ────► [R2: BLOCK] (Overrides all inputs)
-                            └─────────────────────────┘
-                                         │ Active
-                                         ▼
-                            ┌─────────────────────────┐
-                            │ Step 3: Valid Input?    │──── No ─────► [R7: BLOCK]
-                            │ (Action & Amount)       │
-                            └─────────────────────────┘
-                                         │ Valid
-                                         ▼
-                            ┌─────────────────────────┐
-                            │ Step 4: Evaluate Action │
-                            └─────────────────────────┘
-                                         │
-         ┌───────────────────┬───────────┴───────────┬───────────────────┐
-         ▼                   ▼                       ▼                   ▼
-    View Fares          Book Flight             Book Flight       Change Booking /
-         │            (<= EUR 200.00)         (> EUR 200.00)       Request Refund
-         ▼                   ▼                       ▼                   ▼
-    [R3: ALLOW]         [R4: ALLOW]          [R5: ASK CUSTOMER]  [R6: ASK CUSTOMER]
-                                              (PENDING APPROVAL)  (PENDING APPROVAL)
-                                         │
-                                         ▼
-                        ┌─────────────────────────────────┐
-                        │ Step 5: Generate Result Object  │
-                        └─────────────────────────────────┘
-                                         │
-                                         ▼
-                        ┌─────────────────────────────────┐
-                        │ Step 6: Append to Audit Trail   │
-                        └─────────────────────────────────┘
-```
 
 ### Comprehensive Rule Reference Table
 
@@ -164,7 +240,7 @@ Every incoming request is evaluated through an immutable six-step sequence:
 
 ---
 
-## 6. Agent Identity & Security Model
+## 7. Agent Identity & Security Model
 
 In this academic simulation:
 - **Agent Identity Tuple:** Represented by the composite key `(customer_id, agent_name)`.
@@ -179,7 +255,7 @@ In this academic simulation:
 
 ---
 
-## 7. Audit Log & Non-Repudiation Architecture
+## 8. Audit Log & Non-Repudiation Architecture
 
 The Gatekeeper enforces permanent, verifiable auditability to protect both customer rights and airline regulatory compliance.
 
@@ -216,7 +292,7 @@ When an agent is revoked, Rule R2 stores and outputs the revocation timestamp. I
 
 ---
 
-## 8. Database Schema & Data Integrity
+## 9. Database Schema & Data Integrity
 
 The SQLite database (`data/gatekeeper.db`) is automatically initialized with strict foreign keys (`PRAGMA foreign_keys = ON;`) and check constraints:
 
@@ -254,7 +330,7 @@ The SQLite database (`data/gatekeeper.db`) is automatically initialized with str
 
 ---
 
-## 9. Technology Stack
+## 10. Technology Stack
 
 The project adheres to pinned, reproducible dependencies compatible with Python 3.13+:
 
@@ -278,7 +354,7 @@ streamlit==1.67.0
 
 ---
 
-## 10. Local Installation & Setup
+## 11. Local Installation & Setup
 
 ### Prerequisites
 - Python `3.13+` installed on your machine.
@@ -309,7 +385,7 @@ pip install -r requirements.txt
 
 ---
 
-## 11. Running the Application
+## 12. Running the Application
 
 Launch the Streamlit web dashboard locally:
 ```bash
@@ -332,7 +408,7 @@ The sidebar provides access to six dedicated operational modules:
 
 ---
 
-## 12. Testing & Verification Suite
+## 13. Testing & Verification Suite
 
 All business rules, amount boundaries, and database triggers are verified using an automated test suite ([test_cases.py](file:///c:/Users/panka/OneDrive/Desktop/Ryanair-Agent-Gatekeeper/test_cases.py)) executing against isolated in-memory databases (`:memory:`).
 
@@ -408,7 +484,7 @@ RESULTS: 21 PASSED, 0 FAILED (Total: 21)
 
 ---
 
-## 13. Enterprise Production Security Considerations
+## 14. Enterprise Production Security Considerations
 
 While this academic project simulates agent identity using normalized tuples `(customer_id, agent_name)` and SQLite storage, an enterprise production deployment in commercial aviation would implement:
 
